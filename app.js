@@ -76,6 +76,7 @@ function connectWS() {
   ws.binaryType = 'arraybuffer';
 
   ws.addEventListener('open', () => {
+    state.connected = true;
     setStatus('online', 'Cogito · Live');
     startTimer();
     // If image already loaded, send init
