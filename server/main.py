@@ -31,8 +31,8 @@ SERVER_DIR = pathlib.Path(__file__).parent
 
 # ── Config ────────────────────────────────────────────────────────────────────
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-LIVE_MODEL     = "models/gemini-2.0-flash-exp"
-VISION_MODEL   = "models/gemini-2.0-flash-exp"  # High capability
+LIVE_MODEL     = "models/gemini-2.0-flash"
+VISION_MODEL   = "models/gemini-2.0-flash"  # High capability
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are Cogito, a warm and Socratic AI math tutor. 
