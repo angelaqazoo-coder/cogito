@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cogito — AI Cognitive Companion</title>
+  <meta name="description" content="A Socratic AI tutor that listens to you think, renders your maths live, and speaks back with hints." />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+
+  <!-- KaTeX -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"></script>
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ── App shell ───────────────────────────────────────────────────────────── -->
+<div id="app">
+
+  <!-- Top bar -->
+  <header id="topbar">
+    <div class="logo">
+      <div class="logo-icon">🧠</div>
+      <span class="logo-name">Cogito</span>
+      <span class="logo-badge">AI Companion</span>
+    </div>
+    <div id="connection-status" class="status-pill status-offline" title="Backend connection status">
+      <span class="status-dot"></span>
+      <span class="status-label">Offline</span>
+    </div>
+    <div id="session-clock">00:00</div>
+  </header>
+
+  <!-- 2-Panel Main -->
+  <div id="main">
+
+    <!-- ── LEFT: Problem Viewer ──────────────────────────────────────────── -->
+    <section id="panel-problem" aria-label="Problem viewer">
+
+      <div class="panel-header">
+        <span class="panel-label">📷 Problem</span>
+        <div id="problem-topics" class="topic-chips"></div>
+      </div>
+
+      <!-- Upload state -->
+      <div id="upload-state">
+        <div id="drop-zone" role="button" tabindex="0" aria-label="Upload problem screenshot">
+          <input id="file-input" type="file" accept="image/*" aria-hidden="true" />
+          <div class="drop-icon">🖼️</div>
+          <div class="drop-title">Drop a screenshot here</div>
+          <div class="drop-hint">or paste  ⌘V  ·  click to browse</div>
+        </div>
+      </div>
+
+      <!-- Loaded state: image + SVG annotation overlay -->
+      <div id="problem-loaded" class="hidden">
+        <div id="img-container">
+          <img id="problem-img" src="" alt="Problem screenshot" />
+          <!-- SVG overlay for annotations — drawn by JS -->
+          <svg id="annotation-svg" viewBox="0 0 1000 1000" preserveAspectRatio="none"
+               aria-label="Problem annotations" role="img">
+          </svg>
+          <!-- Active annotation tooltip -->
+          <div id="annotation-tooltip" class="hidden">
+            <span id="annotation-tooltip-text"></span>
+          </div>
+        </div>
+
+        <!-- Problem summary + remove -->
+        <div id="problem-meta">
+          <p id="problem-summary"></p>
+          <button id="remove-img-btn" aria-label="Remove image and start over">✕ Remove</button>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ── RIGHT: Workspace ──────────────────────────────────────────────── -->
+    <section id="panel-workspace" aria-label="Math workspace">
+
+      <div class="panel-header">
+        <span class="panel-label">✏️ Workspace</span>
+        <div id="workspace-legend">
+          <span class="legend correct">✓ correct</span>
+          <span class="legend error">✗ error</span>
+          <span class="legend partial">~ partial</span>
+        </div>
+      </div>
+
+      <div id="workspace-body">
+
+        <!-- Empty placeholder -->
+        <div id="workspace-empty">
+          <div class="empty-icon">🎙️</div>
+          <p>Upload a problem, then tap the mic and start thinking aloud.</p>
+          <p class="empty-sub">Your maths will appear here — no typing needed.</p>
+        </div>
+
+        <!-- Current step display -->
+        <div id="current-step" class="hidden">
+          <div class="step-header">
+            <span class="step-badge" id="step-status-badge">Current Step</span>
+            <span class="step-label-text" id="step-label-disp"></span>
+          </div>
+
+          <!-- What the user said, rendered as LaTeX -->
+          <div id="latex-display" class="latex-box"></div>
+
+          <!-- Correction (shown only on error) -->
+          <div id="correction-box" class="hidden">
+            <div class="correction-label">✗ Your version</div>
+            <div id="latex-wrong" class="latex-box latex-wrong"></div>
+            <div class="correction-label correction-ok">✓ Corrected</div>
+            <div id="latex-correct" class="latex-box latex-correct-box"></div>
+          </div>
+        </div>
+
+        <!-- Hint card -->
+        <div id="hint-card" class="hidden">
+          <span id="hint-icon" class="hint-icon"></span>
+          <div class="hint-body">
+            <div id="hint-type-label" class="hint-type"></div>
+            <div id="hint-text-content" class="hint-text"></div>
+          </div>
+        </div>
+
+        <!-- Progress flowchart -->
+        <div id="flowchart-section" class="hidden">
+          <div class="section-label">Your Path</div>
+          <div id="flowchart-scroll">
+            <svg id="flowchart-svg" aria-label="Progress flowchart" role="img"></svg>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </div><!-- /#main -->
+
+  <!-- ── Bottom mic bar ──────────────────────────────────────────────────── -->
+  <div id="mic-bar">
+    <div id="mic-region">
+      <button id="mic-btn" aria-label="Toggle microphone" aria-pressed="false" title="Click or Space to toggle mic">
+        <span id="mic-icon">🎤</span>
+      </button>
+      <div id="waveform-display" aria-hidden="true">
+        <span id="wave-idle-label">Start speaking…</span>
+        <!-- bars injected by JS -->
+      </div>
+      <div id="volume-wrap" title="Speaker volume">
+        <span>🔊</span>
+        <input id="vol-slider" type="range" min="0" max="1" step="0.05" value="1" aria-label="Speaker volume" />
+      </div>
+    </div>
+
+    <!-- Keyboard hint -->
+    <div id="mic-hint">Press <kbd>Space</kbd> to toggle · mic is streaming to Cogito</div>
+  </div>
+
+</div><!-- /#app -->
+
+<script src="app.js"></script>
+</body>
+</html>
