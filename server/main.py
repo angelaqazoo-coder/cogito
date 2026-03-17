@@ -142,6 +142,10 @@ async def analyze_image(file: UploadFile = File(...)):
 
     image_bytes = await file.read()
     mime = file.content_type or "image/png"
+    if mime == "video/mp4":
+        logger.info(f"Analyzing video ({len(image_bytes)} bytes)")
+    else:
+        logger.info(f"Analyzing image ({len(image_bytes)} bytes)")
 
     client = genai.Client(api_key=GEMINI_API_KEY, http_options={'api_version': 'v1alpha'})
     try:
@@ -196,7 +200,7 @@ async def generate_diagram(request: dict):
         return {"error": str(e)}
 
 
-# ── WebSocket: live session ───────────────────────────────────────────────────
+# ── WebSocket: live session (REST-based, reliable) ────────────────────────────
 @app.websocket("/ws/{session_id}")
 async def ws_session(websocket: WebSocket, session_id: str):
     await websocket.accept()
@@ -207,109 +211,96 @@ async def ws_session(websocket: WebSocket, session_id: str):
         await websocket.close()
         return
 
-    client = genai.Client(api_key=GEMINI_API_KEY, http_options={'api_version': 'v1alpha'})
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    # Session state
+    session_image_bytes: Optional[bytes] = None
+    session_image_mime: str = "image/png"
+    audio_buffer: list[bytes] = []
+    is_recording = False
+
+    async def process_audio():
+        """Send buffered audio (+ image) to Gemini REST and relay response."""
+        nonlocal audio_buffer, session_image_bytes
+        if not audio_buffer:
+            return
+
+        raw_pcm = b"".join(audio_buffer)
+        audio_buffer = []
+        logger.info(f"Session {session_id}: processing {len(raw_pcm)} bytes of audio")
+
+        parts = []
+        if session_image_bytes:
+            parts.append(types.Part(inline_data=types.Blob(
+                data=session_image_bytes, mime_type=session_image_mime
+            )))
+        parts.append(types.Part(inline_data=types.Blob(
+            data=raw_pcm, mime_type="audio/pcm;rate=16000"
+        )))
+        parts.append(types.Part(text="[The student just spoke. Respond as Cogito and call render_workspace.]"))
+
+        await websocket.send_json({"type": "thinking"})
+        try:
+            response = await client.aio.models.generate_content(
+                model=VISION_MODEL,
+                contents=[types.Content(role="user", parts=parts)],
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    tools=[RENDER_TOOL],
+                    tool_config=types.ToolConfig(
+                        function_calling_config=types.FunctionCallingConfig(mode="AUTO")
+                    ),
+                    temperature=0.7,
+                )
+            )
+            speech_text = None
+            for candidate in response.candidates:
+                for part in candidate.content.parts:
+                    if part.function_call and part.function_call.name == "render_workspace":
+                        await websocket.send_json({
+                            "type": "workspace_update",
+                            "payload": dict(part.function_call.args),
+                        })
+                    elif part.text:
+                        speech_text = part.text
+            if speech_text:
+                await websocket.send_json({"type": "speak", "text": speech_text})
+            await websocket.send_json({"type": "turn_complete"})
+
+        except Exception as e:
+            logger.error(f"Session {session_id} Gemini error: {e}")
+            await websocket.send_json({"type": "error", "message": str(e)})
 
     try:
-        async with client.aio.live.connect(model=LIVE_MODEL, config=LIVE_CONFIG) as gemini:
+        while True:
+            try:
+                msg = await websocket.receive()
+            except (WebSocketDisconnect, RuntimeError):
+                break
+            if msg.get("type") == "websocket.disconnect":
+                break
 
-            async def browser_to_gemini():
-                """Read from browser WebSocket → relay to Gemini Live."""
-                while True:
-                    try:
-                        msg = await websocket.receive()
-                    except (WebSocketDisconnect, RuntimeError):
-                        break
+            if "bytes" in msg and msg["bytes"]:
+                if is_recording:
+                    audio_buffer.append(msg["bytes"])
 
-                    if msg.get("type") == "websocket.disconnect":
-                        break
-
-                    if "bytes" in msg and msg["bytes"]:
-                        await gemini.send(
-                            input=types.LiveClientRealtimeInput(
-                                media_chunks=[
-                                    types.Blob(
-                                        data=msg["bytes"],
-                                        mime_type="audio/pcm;rate=16000",
-                                    )
-                                ]
-                            )
-                        )
-
-                    elif "text" in msg and msg["text"]:
-                        try:
-                            ctrl = json.loads(msg["text"])
-                        except json.JSONDecodeError:
-                            continue
-
-                        if ctrl.get("type") == "init" and ctrl.get("image"):
-                            img_bytes = base64.b64decode(ctrl["image"])
-                            img_mime  = ctrl.get("mime", "image/png")
-                            logger.info(f"Session {session_id}: loading image ({len(img_bytes)} bytes)")
-                            await gemini.send(
-                                input=[
-                                    types.Part(inline_data=types.Blob(data=img_bytes, mime_type=img_mime)),
-                                    types.Part(text=(
-                                        "This is the math problem the student is working on. "
-                                        "Acknowledge briefly that you can see it and are ready."
-                                    )),
-                                ],
-                                end_of_turn=True,
-                            )
-                        elif ctrl.get("type") == "end_turn":
-                            await gemini.send(end_of_turn=True)
-
-            async def gemini_to_browser():
-                """Read from Gemini Live → relay to browser WebSocket."""
-                async for response in gemini.receive():
-                    try:
-                        if response.server_content and response.server_content.model_turn:
-                            for part in response.server_content.model_turn.parts:
-                                if part.inline_data and "audio" in part.inline_data.mime_type:
-                                    audio_b64 = base64.b64encode(part.inline_data.data).decode()
-                                    await websocket.send_json({
-                                        "type": "audio",
-                                        "data": audio_b64,
-                                        "mime": part.inline_data.mime_type,
-                                    })
-
-                        if response.tool_call:
-                            for fn in response.tool_call.function_calls:
-                                if fn.name == "render_workspace":
-                                    await websocket.send_json({
-                                        "type": "workspace_update",
-                                        "payload": dict(fn.args),
-                                    })
-                                    await gemini.send(
-                                        input=types.LiveClientToolResponse(
-                                            function_responses=[
-                                                types.FunctionResponse(
-                                                    name=fn.name,
-                                                    id=fn.id,
-                                                    response={"result": "Workspace updated."},
-                                                )
-                                            ]
-                                        )
-                                    )
-
-                        if response.server_content and response.server_content.turn_complete:
-                            await websocket.send_json({"type": "turn_complete"})
-
-                        if response.server_content and response.server_content.interrupted:
-                            await websocket.send_json({"type": "interrupted"})
-
-                    except WebSocketDisconnect:
-                        break
-                    except Exception as e:
-                        logger.error(f"Receive loop error: {e}")
-
-            send_task    = asyncio.create_task(browser_to_gemini())
-            receive_task = asyncio.create_task(gemini_to_browser())
-            done, pending = await asyncio.wait(
-                [send_task, receive_task],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in pending:
-                task.cancel()
+            elif "text" in msg and msg["text"]:
+                try:
+                    ctrl = json.loads(msg["text"])
+                except json.JSONDecodeError:
+                    continue
+                t = ctrl.get("type")
+                if t == "init" and (ctrl.get("image") or ctrl.get("video")):
+                    data_b64 = ctrl.get("image") or ctrl.get("video")
+                    session_image_mime = ctrl.get("mime", "image/png")
+                    session_image_bytes = base64.b64decode(data_b64)
+                    logger.info(f"Session {session_id}: media loaded ({len(session_image_bytes)} bytes)")
+                elif t == "start_recording":
+                    is_recording = True
+                    audio_buffer = []
+                elif t == "end_turn":
+                    is_recording = False
+                    await process_audio()
 
     except WebSocketDisconnect:
         logger.info(f"Session {session_id} disconnected cleanly")
@@ -319,6 +310,9 @@ async def ws_session(websocket: WebSocket, session_id: str):
             await websocket.send_json({"type": "error", "message": str(e)})
         except Exception:
             pass
+
+
+
 
 
 # ── Serve frontend static files ───────────────────────────────────────────────

@@ -104,18 +104,42 @@ function sendJSON(obj) {
 }
 
 function sendInit() {
-  sendJSON({ type: 'init', image: state.imageData, mime: state.imageMime });
+  if (!state.imageData) return;
+  const isVideo = state.imageMime === 'video/mp4';
+  const payload = { type: 'init', mime: state.imageMime };
+  if (isVideo) payload.video = state.imageData;
+  else         payload.image = state.imageData;
+  sendJSON(payload);
 }
 
 /* ── WS incoming messages ────────────────────────────────────────────────── */
 function onWsMessage(evt) {
   if (typeof evt.data === 'string') {
     const msg = JSON.parse(evt.data);
-    if (msg.type === 'audio')            handleAudioChunk(msg.data, msg.mime);
+    if (msg.type === 'audio')                 handleAudioChunk(msg.data, msg.mime);
     else if (msg.type === 'workspace_update') handleWorkspaceUpdate(msg.payload);
     else if (msg.type === 'turn_complete')    handleTurnComplete();
-    else if (msg.type === 'error')       console.error('Server error:', msg.message);
+    else if (msg.type === 'interrupted')      handleInterrupted();
+    else if (msg.type === 'thinking')         elWaveform.classList.add('ai-speaking');
+    else if (msg.type === 'speak')            speakText(msg.text);
+    else if (msg.type === 'error')            console.error('Server error:', msg.message);
   }
+}
+
+function speakText(text) {
+  if (!text || !window.speechSynthesis) return;
+  speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 1.0;
+  utter.pitch = 1.0;
+  utter.onstart = () => elWaveform.classList.add('ai-speaking');
+  utter.onend   = () => elWaveform.classList.remove('ai-speaking');
+  speechSynthesis.speak(utter);
+}
+
+function handleInterrupted() {
+  speechSynthesis?.cancel();
+  elWaveform.classList.remove('ai-speaking');
 }
 
 /* ── Session timer ───────────────────────────────────────────────────────── */
@@ -148,7 +172,9 @@ document.addEventListener('paste', e => {
 elRemoveImg.addEventListener('click', resetProblem);
 
 async function handleFile(file) {
-  if (!file || !file.type.startsWith('image/')) return;
+  if (!file) return;
+  const isVideo = file.type === 'video/mp4';
+  if (!file.type.startsWith('image/') && !isVideo) return;
 
   const reader = new FileReader();
   reader.onload = async e => {
@@ -159,8 +185,26 @@ async function handleFile(file) {
     state.imageMime = file.type;
     state.imageLoaded = true;
 
-    // Show image
-    elProblemImg.src = dataUrl;
+    // Show preview
+    if (isVideo) {
+      elProblemImg.classList.add('hidden');
+      let videoEl = document.getElementById('problem-video');
+      if (!videoEl) {
+        videoEl = document.createElement('video');
+        videoEl.id = 'problem-video';
+        videoEl.controls = true;
+        videoEl.autoplay = true;
+        videoEl.muted = true;
+        videoEl.loop = true;
+        elProblemImg.parentNode.insertBefore(videoEl, elProblemImg);
+      }
+      videoEl.src = dataUrl;
+      videoEl.classList.remove('hidden');
+    } else {
+      elProblemImg.src = dataUrl;
+      elProblemImg.classList.remove('hidden');
+      document.getElementById('problem-video')?.classList.add('hidden');
+    }
     elUploadState.classList.add('hidden');
     elProblemLoaded.classList.remove('hidden');
 
@@ -587,6 +631,8 @@ async function startMic() {
     elMicBtn.classList.add('recording');
     elMicBtn.setAttribute('aria-pressed', 'true');
     animateWave(true);
+    // Tell server we are starting a new recording turn
+    sendJSON({ type: 'start_recording' });
   } catch (err) {
     console.error('Mic error:', err);
     alert('Microphone access denied or unavailable.');
