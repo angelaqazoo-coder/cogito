@@ -564,7 +564,13 @@ async function startMic() {
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
 
-    await ctx.audioWorklet.addModule('audio-processor.js');
+    try {
+      await ctx.audioWorklet.addModule('audio-processor.js');
+    } catch (e) {
+      if (e.name !== 'NotSupportedError' && !e.message.includes('already been added')) {
+        throw e;
+      }
+    }
     const source = ctx.createMediaStreamSource(micStream);
     workletNode  = new AudioWorkletNode(ctx, 'pcm-processor');
 
@@ -596,6 +602,7 @@ function stopMic() {
   elMicBtn.classList.remove('recording');
   elMicBtn.setAttribute('aria-pressed', 'false');
   animateWave(false);
+  sendJSON({ type: 'end_turn' });
 }
 
 /* ── Boot ────────────────────────────────────────────────────────────────── */

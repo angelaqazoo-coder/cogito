@@ -31,8 +31,8 @@ SERVER_DIR = pathlib.Path(__file__).parent
 
 # ── Config ────────────────────────────────────────────────────────────────────
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-LIVE_MODEL     = "models/gemini-2.0-flash"
-VISION_MODEL   = "models/gemini-2.0-flash"  # High capability
+LIVE_MODEL       = "models/gemini-2.0-flash-exp"
+VISION_MODEL     = "models/gemini-2.0-flash"  # High capability
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are Cogito, a warm and Socratic AI math tutor. 
@@ -143,7 +143,7 @@ async def analyze_image(file: UploadFile = File(...)):
     image_bytes = await file.read()
     mime = file.content_type or "image/png"
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options={'api_version': 'v1alpha'})
     try:
         response = await client.aio.models.generate_content(
             model=VISION_MODEL,
@@ -177,7 +177,7 @@ async def generate_diagram(request: dict):
     concept = request.get("concept", "Mathematical concept")
     prompt  = f"Create a clean, professional, educational diagram illustrating the mathematical concept of: {concept}. Use a dark theme, neon blue and orange accents. No text except for essential mathematical variables. High resolution 2D illustration."
     
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options={'api_version': 'v1alpha'})
     try:
         response = await client.aio.models.generate_content(
             model="models/gemini-2.0-flash",
@@ -207,7 +207,7 @@ async def ws_session(websocket: WebSocket, session_id: str):
         await websocket.close()
         return
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options={'api_version': 'v1alpha'})
 
     try:
         async with client.aio.live.connect(model=LIVE_MODEL, config=LIVE_CONFIG) as gemini:
@@ -255,6 +255,8 @@ async def ws_session(websocket: WebSocket, session_id: str):
                                 ],
                                 end_of_turn=True,
                             )
+                        elif ctrl.get("type") == "end_turn":
+                            await gemini.send(end_of_turn=True)
 
             async def gemini_to_browser():
                 """Read from Gemini Live → relay to browser WebSocket."""
